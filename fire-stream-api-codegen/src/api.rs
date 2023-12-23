@@ -166,12 +166,7 @@ pub(crate) fn expand(
 					match r {
 						Ok(m) => Ok(m),
 						Err(e) => {
-							if data.cfg().log_errors {
-								eprintln!(concat!(
-									stringify!(#req_ty),
-									" returned error {:?}"
-								), e)
-							}
+							data.cfg().log_api_error(stringify!(#req_ty), &e);
 
 							<#ty_as_req::Error as #into_msg>::into_message(e)
 								.map(|mut msg| {

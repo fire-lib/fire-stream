@@ -13,15 +13,35 @@ pub use stream::packet::EncryptedBytes;
 use std::collections::HashMap;
 use std::any::{Any, TypeId};
 use std::sync::{Arc, Mutex};
+use std::error::Error as StdError;
 use std::io;
 
 #[cfg(feature = "encrypted")]
 use crypto::signature::Keypair;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct ServerConfig {
-	pub log_errors: bool
+	#[deprecated]
+	pub log_errors: bool,
+	logger: Box<dyn ErrorLogger>
+}
+
+impl ServerConfig {
+	pub fn log_api_error(&self, src: &str, e: &dyn StdError) {
+		self.logger.api_error(src, e);
+	}
+}
+
+impl Default for ServerConfig {
+	fn default() -> Self {
+		#[allow(deprecated)]
+
+		Self {
+			log_errors: false,
+			logger: Box::new(TracingLogger::new())
+		}
+	}
 }
 
 pub struct Data {
@@ -116,15 +136,58 @@ where A: Action {
 	}
 }
 
+pub trait ErrorLogger: std::fmt::Debug + Send + Sync {
+	/// this get's called when the handler returns an error
+	fn handler_error(&self, e: Error);
+
+	fn api_error(&self, src: &str, e: &dyn StdError);
+}
+
+/// this is only as a deprecation measure
+/// no stderr will exist after the next version
+/// todo
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct StderrLogger {}
+
+impl StderrLogger {
+	fn new() -> Self {
+		Self {}
+	}
+}
+
+impl ErrorLogger for StderrLogger {
+	fn handler_error(&self, e: Error) {
+		eprintln!("handler had an error {e:?}");
+	}
+
+	fn api_error(&self, src: &str, e: &dyn StdError) {
+		eprintln!("{src} returned error {e:?}");
+	}
+}
 impl<A, B, L, More> Server<A, B, L, More>
 where
 	A: Action,
 	L: Listener
 {
-	/// If this ist set to true
+	/// If this is set to true
 	/// errors which are returned in `#[api(*)]` functions are logged to stderr
+	///
+	/// Use `set_logger` instead if you don't wan't the default tracing logger
+	#[deprecated]
 	pub fn set_log_errors(&mut self, log: bool) {
-		self.data.cfg.log_errors = log;
+		#[allow(deprecated)]
+		{
+			self.data.cfg.log_errors = log;
+		}
+
+		self.data.cfg.logger = Box::new(StderrLogger::new());
+	}
+
+	/// Set's the logger which get's called with errors which routes return
+	pub fn set_logger<Logger>(&mut self, logger: Logger)
+	where Logger: ErrorLogger + 'static {
+		self.data.cfg.logger = Box::new(logger);
 	}
 
 	async fn run_raw<F>(self, new_connection: F) -> io::Result<()>
@@ -198,7 +261,8 @@ where
 								// todo once we bump the version again
 								// we need to pass our own errors via packets
 								// not only those from the api users
-								eprintln!("handler returned an error {:?}", e);
+								// self.cfg.logger.
+								share.data.cfg.logger.handler_error(e);
 							}
 						}
 					});
